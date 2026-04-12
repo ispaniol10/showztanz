@@ -635,6 +635,7 @@
   }
 
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -665,6 +666,8 @@
       <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Jahr 2026 · Aktive Tänzerinnen · <span style="color:var(--text-dim);">© Ingo Spaniol</span></div>
     </div>
   </div>
+  <div style="display:flex;align-items:center;gap:16px;">
+    <div id="sync-status" style="font-size:11px;color:var(--teal);opacity:0;transition:opacity 1s;white-space:nowrap;"></div>
   <div class="header-stats">
     <div class="hstat">
       <div class="hstat-val" id="h-kontostand">—</div>
@@ -678,6 +681,7 @@
       <div class="hstat-val" id="h-fz">—</div>
       <div class="hstat-label">Ferienfreizeit</div>
     </div>
+  </div>
   </div>
 </header>
 
@@ -1132,17 +1136,40 @@ const INITIAL_EINNAHMEN = [
 // ==================== STATE ====================
 let state = {};
 
-function loadState() {
+async function loadState() {
+  showSyncStatus('⏳ Daten werden geladen…');
   try {
-    const saved = localStorage.getItem('showtanz2026');
-    if (saved) {
-      state = JSON.parse(saved);
-    } else {
+    // Erst localStorage als schnellen Cache laden
+    const cached = localStorage.getItem('showtanz2026');
+    if (cached) state = JSON.parse(cached);
+
+    // Dann aus Supabase laden (immer aktuellste Version)
+    const { data, error } = await sbClient.from('app_state').select('data').eq('id', 1).single();
+    if (data && data.data) {
+      state = data.data;
+      localStorage.setItem('showtanz2026', JSON.stringify(state));
+      showSyncStatus('✓ Online-Daten geladen');
+    } else if (!cached) {
+      // Kein lokaler Cache, keine Supabase-Daten → Standarddaten
       state = initDefaultState();
-      saveState();
+      await syncToSupabase();
+      showSyncStatus('✓ Standarddaten initialisiert');
+    } else {
+      showSyncStatus('⚠ Offline – lokale Daten');
     }
   } catch(e) {
-    state = initDefaultState();
+    console.warn('Supabase load error:', e);
+    if (!state || !state.members) state = initDefaultState();
+    showSyncStatus('⚠ Offline – lokale Daten');
+  }
+}
+
+function showSyncStatus(msg) {
+  const el = document.getElementById('sync-status');
+  if (el) {
+    el.textContent = msg;
+    el.style.opacity = '1';
+    setTimeout(() => el.style.opacity = '0', 3000);
   }
 }
 
@@ -1161,7 +1188,18 @@ function initDefaultState() {
 }
 
 function saveState() {
+  // local cache für schnelle Reaktion
   localStorage.setItem('showtanz2026', JSON.stringify(state));
+  // async in Supabase speichern (fire & forget)
+  syncToSupabase();
+}
+
+async function syncToSupabase() {
+  try {
+    await sbClient.from('app_state').upsert({ id: 1, data: state }, { onConflict: 'id' });
+  } catch(e) {
+    console.warn('Supabase sync error:', e);
+  }
 }
 
 // ==================== COMPUTED ====================
@@ -1695,8 +1733,17 @@ function init() {
   renderSettings();
 }
 
-loadState();
-init();
+// Supabase Client initialisieren
+const sbClient = window.supabase.createClient(
+  "https://sbrwgywdydzgickhhvir.supabase.co",
+  "sb_publishable_OryRLBvdv8TsJbFqBsUgFQ_cfMmMLQN"
+);
+
+// App starten
+(async () => {
+  await loadState();
+  init();
+})();
 
   // ==================== PASSWORD PROTECTION ====================
   (function() {
@@ -1744,38 +1791,6 @@ init();
     });
   })();
 
-</script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
-
-<script>
-const supabase = window.supabase.createClient(
-  "https://sbrwgywdydzgickhhvir.supabase.co",
-  "sb_publishable_OryRLBvdv8TsJbFqBsUgFQ_cfMmMLQN"
-);
-
-// Mitglieder laden
-async function loadMembers() {
-  let { data } = await supabase.from("members").select("*");
-
-  let liste = document.getElementById("liste");
-  liste.innerHTML = "";
-
-  data.forEach(m => {
-    liste.innerHTML += "<li>" + m.name + "</li>";
-  });
-}
-
-// Mitglied hinzufügen
-async function add() {
-  let name = document.getElementById("name").value;
-
-  await supabase.from("members").insert([{ name }]);
-
-  loadMembers();
-}
-
-// beim Laden
-loadMembers();
 </script>
 </body>
 </html>
